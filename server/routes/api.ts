@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import type { Agent } from "../types";
-import { sessions, createSession, deleteSession, injectPluginDir } from "../services/sessionManager";
-import { loadState, saveState, savePositions, getDataDir } from "../services/persistence";
+import { sessions, createSession, deleteSession, injectPluginDir, attachPty, createShell, listShells } from "../services/sessionManager";
+import { loadState, saveState, savePositions, getDataDir, writeState, getCanvases } from "../services/persistence";
+import { refreshSessionPullRequests } from "../services/metrics";
 import {
   loadConfig,
   saveConfig,
@@ -94,7 +95,10 @@ apiRoutes.get("/agents", (c) => {
 });
 
 apiRoutes.get("/sessions", (c) => {
-  const sessionList = Array.from(sessions.entries()).map(([id, session]) => {
+  const sessionList = Array.from(sessions.entries())
+    .filter(([, session]) => !session.isShell)
+    .map(([id, session]) => {
+    const { transcriptOffset, ...metrics } = session.metrics || ({} as any);
     return {
       sessionId: id,
       nodeId: session.nodeId,
@@ -112,6 +116,16 @@ apiRoutes.get("/sessions", (c) => {
       isRestored: session.isRestored,
       ticketId: session.ticketId,
       ticketTitle: session.ticketTitle,
+      ticketUrl: session.ticketUrl,
+      currentTool: session.currentTool,
+      canvasId: session.canvasId,
+      icon: session.icon,
+      pinned: !!session.pinned,
+      archived: !!session.archived,
+      metrics: session.metrics ? metrics : undefined,
+      prs: session.prs || [],
+      lastActivityAt: session.lastActivityAt,
+      shells: listShells(id),
     };
   });
   return c.json(sessionList);
@@ -174,6 +188,8 @@ apiRoutes.post("/sessions", async (c) => {
     branchName,
     baseBranch,
     createWorktree: createWorktreeFlag,
+    canvasId,
+    icon,
   } = body;
 
   const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -199,6 +215,8 @@ apiRoutes.post("/sessions", async (c) => {
     baseBranch,
     createWorktreeFlag,
     ticketPromptTemplate,
+    canvasId,
+    icon,
   });
 
   saveState(sessions);
@@ -216,43 +234,11 @@ apiRoutes.post("/sessions/:sessionId/restart", async (c) => {
   if (!session) return c.json({ error: "Session not found" }, 404);
   if (session.pty) return c.json({ error: "Session already running" }, 400);
 
-  const { spawn } = await import("bun-pty");
-  const ptyProcess = spawn("/bin/bash", [], {
-    name: "xterm-256color",
-    cwd: session.cwd,
-    env: { ...process.env, TERM: "xterm-256color" },
-    rows: 30,
-    cols: 120,
-  });
-
-  session.pty = ptyProcess;
   session.isRestored = false;
   session.status = "running";
   session.lastOutputTime = Date.now();
-
-  const resetInterval = setInterval(() => {
-    if (!sessions.has(sessionId) || !session.pty) {
-      clearInterval(resetInterval);
-      return;
-    }
-    session.recentOutputSize = Math.max(0, session.recentOutputSize - 50);
-  }, 500);
-
-  ptyProcess.onData((data: string) => {
-    session.outputBuffer.push(data);
-    if (session.outputBuffer.length > 1000) {
-      session.outputBuffer.shift();
-    }
-
-    session.lastOutputTime = Date.now();
-    session.recentOutputSize += data.length;
-
-    for (const client of session.clients) {
-      if (client.readyState === 1) {
-        client.send(JSON.stringify({ type: "output", data }));
-      }
-    }
-  });
+  session.lastActivityAt = Date.now();
+  const ptyProcess = attachPty(sessionId, session);
 
   const finalCommand = injectPluginDir(session.command, session.agentId);
   setTimeout(() => {
@@ -272,6 +258,10 @@ apiRoutes.patch("/sessions/:sessionId", async (c) => {
   if (updates.customName !== undefined) session.customName = updates.customName;
   if (updates.customColor !== undefined) session.customColor = updates.customColor;
   if (updates.notes !== undefined) session.notes = updates.notes;
+  if (updates.icon !== undefined) session.icon = updates.icon;
+  if (updates.pinned !== undefined) session.pinned = !!updates.pinned;
+  if (updates.archived !== undefined) session.archived = !!updates.archived;
+  if (updates.canvasId !== undefined) session.canvasId = updates.canvasId;
 
   saveState(sessions);
   return c.json({ success: true });
@@ -291,7 +281,7 @@ apiRoutes.delete("/sessions/:sessionId", (c) => {
 // Status update endpoint for Claude Code plugin
 apiRoutes.post("/status-update", async (c) => {
   const body = await c.req.json();
-  const { status, openuiSessionId, claudeSessionId, cwd, hookEvent, toolName, stopReason } = body;
+  const { status, openuiSessionId, claudeSessionId, cwd, hookEvent, toolName, stopReason, transcriptPath, model } = body;
 
   // Log the full raw payload for debugging
   log(`\x1b[38;5;82m[plugin-hook]\x1b[0m ${hookEvent || 'unknown'}: status=${status} tool=${toolName || 'none'} openui=${openuiSessionId || 'none'}`);
@@ -320,8 +310,22 @@ apiRoutes.post("/status-update", async (c) => {
 
   if (session) {
     // Store Claude session ID mapping if we have it
-    if (claudeSessionId && !session.claudeSessionId) {
+    // (a new Claude session - e.g. after /clear - replaces the old one)
+    if (claudeSessionId && session.claudeSessionId !== claudeSessionId) {
       session.claudeSessionId = claudeSessionId;
+      session.transcriptPath = undefined;
+      session.metrics = undefined;
+    }
+    if (transcriptPath && session.transcriptPath !== transcriptPath) {
+      session.transcriptPath = transcriptPath;
+      session.metrics = undefined;
+    }
+    if (typeof model === "string" && model && session.metrics) session.metrics.model = model;
+    session.lastActivityAt = Date.now();
+
+    // Agent finished a turn - it may have just pushed/opened a PR
+    if (hookEvent === "Stop") {
+      refreshSessionPullRequests(session).catch(() => {});
     }
 
     // Handle pre_tool/post_tool for permission detection
@@ -408,7 +412,77 @@ apiRoutes.post("/status-update", async (c) => {
 // Categories (groups)
 apiRoutes.get("/categories", (c) => {
   const state = loadState();
-  return c.json(state.categories || []);
+  return c.json((state.categories || []).map((cat) => ({ canvasId: "main", ...cat })));
+});
+
+// ============ Canvases ============
+
+apiRoutes.get("/canvases", (c) => {
+  return c.json(getCanvases());
+});
+
+apiRoutes.post("/canvases", async (c) => {
+  const { name } = await c.req.json();
+  const state = loadState();
+  const canvases = getCanvases(state);
+  const canvas = { id: `canvas-${Date.now().toString(36)}`, name: name || `Canvas ${canvases.length + 1}` };
+  state.canvases = [...canvases, canvas];
+  writeState(state);
+  return c.json(canvas);
+});
+
+apiRoutes.patch("/canvases/:canvasId", async (c) => {
+  const canvasId = c.req.param("canvasId");
+  const { name } = await c.req.json();
+  const state = loadState();
+  const canvases = getCanvases(state);
+  const canvas = canvases.find((cv) => cv.id === canvasId);
+  if (!canvas) return c.json({ error: "Canvas not found" }, 404);
+  if (name) canvas.name = name;
+  state.canvases = canvases;
+  writeState(state);
+  return c.json(canvas);
+});
+
+// Deleting a canvas moves its agents and categories to the first remaining canvas
+apiRoutes.delete("/canvases/:canvasId", (c) => {
+  const canvasId = c.req.param("canvasId");
+  const state = loadState();
+  const canvases = getCanvases(state);
+  if (canvases.length <= 1) return c.json({ error: "Cannot delete the last canvas" }, 400);
+
+  const remaining = canvases.filter((cv) => cv.id !== canvasId);
+  if (remaining.length === canvases.length) return c.json({ error: "Canvas not found" }, 404);
+  const fallback = remaining[0].id;
+
+  state.canvases = remaining;
+  for (const cat of state.categories || []) {
+    if ((cat.canvasId || "main") === canvasId) cat.canvasId = fallback;
+  }
+  writeState(state);
+
+  for (const session of sessions.values()) {
+    if (session.canvasId === canvasId) session.canvasId = fallback;
+  }
+  saveState(sessions);
+  return c.json({ success: true, movedTo: fallback });
+});
+
+// ============ Auxiliary shells ============
+
+apiRoutes.post("/sessions/:sessionId/shells", (c) => {
+  const result = createShell(c.req.param("sessionId"));
+  if (!result) return c.json({ error: "Session not found" }, 404);
+  return c.json(result);
+});
+
+apiRoutes.delete("/shells/:shellId", (c) => {
+  const shellId = c.req.param("shellId");
+  const shell = sessions.get(shellId);
+  if (!shell?.isShell) return c.json({ error: "Shell not found" }, 404);
+  shell.pty?.kill();
+  sessions.delete(shellId);
+  return c.json({ success: true });
 });
 
 apiRoutes.post("/categories", async (c) => {
@@ -416,12 +490,9 @@ apiRoutes.post("/categories", async (c) => {
   const category = await c.req.json();
 
   if (!state.categories) state.categories = [];
-  state.categories.push(category);
+  state.categories.push({ canvasId: "main", ...category });
 
-  const { writeFileSync } = require("fs");
-  const { join } = require("path");
-  const DATA_DIR = join(process.env.LAUNCH_CWD || process.cwd(), ".openui");
-  writeFileSync(join(DATA_DIR, "state.json"), JSON.stringify(state, null, 2));
+  writeState(state);
 
   return c.json({ success: true });
 });
@@ -438,10 +509,7 @@ apiRoutes.patch("/categories/:categoryId", async (c) => {
 
   Object.assign(category, updates);
 
-  const { writeFileSync } = require("fs");
-  const { join } = require("path");
-  const DATA_DIR = join(process.env.LAUNCH_CWD || process.cwd(), ".openui");
-  writeFileSync(join(DATA_DIR, "state.json"), JSON.stringify(state, null, 2));
+  writeState(state);
 
   return c.json({ success: true });
 });
@@ -457,10 +525,7 @@ apiRoutes.delete("/categories/:categoryId", (c) => {
 
   state.categories.splice(index, 1);
 
-  const { writeFileSync } = require("fs");
-  const { join } = require("path");
-  const DATA_DIR = join(process.env.LAUNCH_CWD || process.cwd(), ".openui");
-  writeFileSync(join(DATA_DIR, "state.json"), JSON.stringify(state, null, 2));
+  writeState(state);
 
   return c.json({ success: true });
 });

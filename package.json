@@ -1,17 +1,17 @@
 {
-  "name": "@fallom/openui",
+  "name": "@rubenaprikyan/openui",
   "version": "1.2.1",
   "description": "Visual canvas UI for managing AI coding agents locally",
-  "author": "Fallom AI",
+  "author": "Fallom AI, rubenaprikyan",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Fallomai/openui.git"
+    "url": "git+https://github.com/rubenaprikyan/openui.git"
   },
   "bugs": {
-    "url": "https://github.com/Fallomai/openui/issues"
+    "url": "https://github.com/rubenaprikyan/openui/issues"
   },
-  "homepage": "https://github.com/Fallomai/openui#readme",
+  "homepage": "https://github.com/rubenaprikyan/openui#readme",
   "keywords": [
     "ai",
     "coding-agent",
@@ -23,7 +23,8 @@
   ],
   "type": "module",
   "bin": {
-    "openui": "./bin/openui.ts"
+    "openui": "./bin/openui.ts",
+    "openui-update": "./bin/openui-update.ts"
   },
   "files": [
     "bin/",

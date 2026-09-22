@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import type { PersistedState, Session } from "../types";
+import type { Canvas, PersistedState, Session } from "../types";
+
+export const DEFAULT_CANVAS: Canvas = { id: "main", name: "Main" };
 
 // Use local .openui folder where user ran openui from
 const LAUNCH_CWD = process.env.LAUNCH_CWD || process.cwd();
@@ -28,17 +30,34 @@ export function loadState(): PersistedState {
   return { nodes: [] };
 }
 
+export function writeState(state: PersistedState) {
+  ensureDirs();
+  try {
+    writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (e) {
+    console.error("Failed to save state:", e);
+  }
+}
+
+export function getCanvases(state: PersistedState = loadState()): Canvas[] {
+  return state.canvases && state.canvases.length > 0 ? state.canvases : [DEFAULT_CANVAS];
+}
+
 export function saveState(sessions: Map<string, Session>) {
   ensureDirs();
   const savedState = loadState();
 
-  // Preserve categories from existing state
+  // Preserve categories and canvases from existing state
   const state: PersistedState = {
     nodes: [],
     categories: savedState.categories || [],
+    canvases: getCanvases(savedState),
   };
 
   for (const [sessionId, session] of sessions) {
+    // Auxiliary shells are ephemeral
+    if (session.isShell) continue;
+
     // Preserve existing position if we have one
     const existingNode = savedState.nodes.find(n => n.sessionId === sessionId);
 
@@ -55,16 +74,23 @@ export function saveState(sessions: Map<string, Session>) {
       notes: session.notes,
       icon: session.icon,
       position: session.position || existingNode?.position || { x: 0, y: 0 },
+      canvasId: session.canvasId,
+      pinned: session.pinned,
+      archived: session.archived,
+      gitBranch: session.gitBranch,
+      originalCwd: session.originalCwd,
+      ticketId: session.ticketId,
+      ticketTitle: session.ticketTitle,
+      ticketUrl: session.ticketUrl,
+      claudeSessionId: session.claudeSessionId,
+      transcriptPath: session.transcriptPath,
+      lastActivityAt: session.lastActivityAt,
     });
 
     saveBuffer(sessionId, session.outputBuffer);
   }
 
-  try {
-    writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-  } catch (e) {
-    console.error("Failed to save state:", e);
-  }
+  writeState(state);
 }
 
 export function savePositions(positions: Record<string, { x: number; y: number }>) {

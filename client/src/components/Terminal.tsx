@@ -9,9 +9,11 @@ interface TerminalProps {
   sessionId: string;
   color: string;
   nodeId: string;
+  // Auxiliary shells shouldn't overwrite the agent's status
+  trackStatus?: boolean;
 }
 
-export function Terminal({ sessionId, color, nodeId }: TerminalProps) {
+export function Terminal({ sessionId, color, nodeId, trackStatus = true }: TerminalProps) {
   const updateSession = useStore((state) => state.updateSession);
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -78,7 +80,17 @@ export function Terminal({ sessionId, color, nodeId }: TerminalProps) {
     // Reset all terminal attributes before receiving buffered content
     term.write("\x1b[0m\x1b[?25h");
     
-    setTimeout(() => fitAddon.fit(), 50);
+    // Fits scheduled by timers/observers can fire after dispose; xterm throws if so
+    let disposed = false;
+    const safeFit = () => {
+      if (disposed) return;
+      try {
+        fitAddon.fit();
+      } catch {
+        // Terminal not attached/visible yet
+      }
+    };
+    const fitTimeout = setTimeout(safeFit, 50);
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
@@ -113,7 +125,7 @@ export function Terminal({ sessionId, color, nodeId }: TerminalProps) {
               term.write("\x1b[2J\x1b[H\x1b[0m");
             }
             term.write(msg.data);
-          } else if (msg.type === "status") {
+          } else if (msg.type === "status" && trackStatus) {
             // Handle status updates from plugin hooks
             updateSession(nodeId, {
               status: msg.status as AgentStatus,
@@ -146,9 +158,8 @@ export function Terminal({ sessionId, color, nodeId }: TerminalProps) {
 
     const resizeObserver = new ResizeObserver(() => {
       requestAnimationFrame(() => {
-        if (fitAddonRef.current) {
-          fitAddonRef.current.fit();
-        }
+        if (disposed) return;
+        safeFit();
         if (ws?.readyState === WebSocket.OPEN && xtermRef.current) {
           ws.send(JSON.stringify({
             type: "resize",
@@ -163,12 +174,14 @@ export function Terminal({ sessionId, color, nodeId }: TerminalProps) {
 
     return () => {
       mountedRef.current = false;
+      disposed = true;
+      clearTimeout(fitTimeout);
       clearTimeout(connectTimeout);
       resizeObserver.disconnect();
       ws?.close();
       term.dispose();
     };
-  }, [sessionId, color, nodeId, updateSession]);
+  }, [sessionId, color, nodeId, updateSession, trackStatus]);
 
   return (
     <div

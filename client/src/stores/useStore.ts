@@ -31,8 +31,63 @@ export interface AgentSession {
   // Linear ticket info
   ticketId?: string;
   ticketTitle?: string;
+  ticketUrl?: string;
   // Current tool being used (from plugin)
   currentTool?: string;
+  // Organization
+  canvasId?: string;
+  pinned?: boolean;
+  archived?: boolean;
+  // Metrics
+  metrics?: SessionMetrics;
+  prs?: PullRequestInfo[];
+  lastActivityAt?: number;
+  shells?: string[];
+}
+
+export interface SessionMetrics {
+  model?: string;
+  title?: string;
+  totalTokens: number;
+  outputTokens: number;
+  contextTokens: number;
+  contextWindow: number;
+  turns: number;
+}
+
+export interface PullRequestInfo {
+  number: number;
+  url: string;
+  title: string;
+  state: "OPEN" | "MERGED" | "CLOSED";
+  isDraft: boolean;
+  checks: "SUCCESS" | "FAILURE" | "PENDING" | "NONE";
+  reviewDecision?: string;
+}
+
+export interface Canvas {
+  id: string;
+  name: string;
+}
+
+export type ViewMode = "canvas" | "list";
+
+// Persist small UI preferences per browser
+function loadPref<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(`openui:${key}`);
+    return raw === null ? fallback : (JSON.parse(raw) as T);
+  } catch {
+    return fallback;
+  }
+}
+
+export function savePref(key: string, value: unknown) {
+  try {
+    localStorage.setItem(`openui:${key}`, JSON.stringify(value));
+  } catch {
+    // Storage unavailable - preference just won't persist
+  }
 }
 
 interface AppState {
@@ -68,6 +123,22 @@ interface AppState {
   setNewSessionModalOpen: (open: boolean) => void;
   newSessionForNodeId: string | null;
   setNewSessionForNodeId: (nodeId: string | null) => void;
+
+  // Canvases
+  canvases: Canvas[];
+  setCanvases: (canvases: Canvas[]) => void;
+  activeCanvasId: string;
+  setActiveCanvasId: (id: string) => void;
+
+  // Layout
+  viewMode: ViewMode;
+  setViewMode: (mode: ViewMode) => void;
+  panelWidth: number;
+  setPanelWidth: (width: number) => void;
+  panelMaximized: boolean;
+  setPanelMaximized: (maximized: boolean) => void;
+  searchOpen: boolean;
+  setSearchOpen: (open: boolean) => void;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -129,4 +200,29 @@ export const useStore = create<AppState>((set) => ({
   setNewSessionModalOpen: (open) => set({ newSessionModalOpen: open }),
   newSessionForNodeId: null,
   setNewSessionForNodeId: (nodeId) => set({ newSessionForNodeId: nodeId }),
+
+  // Canvases
+  canvases: [{ id: "main", name: "Main" }],
+  setCanvases: (canvases) => set({ canvases }),
+  activeCanvasId: loadPref("activeCanvasId", "main"),
+  setActiveCanvasId: (id) => {
+    savePref("activeCanvasId", id);
+    set({ activeCanvasId: id });
+  },
+
+  // Layout
+  viewMode: loadPref<ViewMode>("viewMode", "canvas"),
+  setViewMode: (mode) => {
+    savePref("viewMode", mode);
+    set({ viewMode: mode });
+  },
+  panelWidth: loadPref("panelWidth", 640),
+  setPanelWidth: (width) => {
+    savePref("panelWidth", width);
+    set({ panelWidth: width });
+  },
+  panelMaximized: false,
+  setPanelMaximized: (maximized) => set({ panelMaximized: maximized }),
+  searchOpen: false,
+  setSearchOpen: (open) => set({ searchOpen: open }),
 }));

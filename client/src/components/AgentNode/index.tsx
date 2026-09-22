@@ -2,11 +2,12 @@ import { NodeProps } from "@xyflow/react";
 import { motion } from "framer-motion";
 import { Sparkles, Code, Cpu, Zap, Rocket, Bot, Brain, Wand2 } from "lucide-react";
 import { useStore, AgentStatus } from "../../stores/useStore";
+import { orderedAgents } from "../../lib/agents";
 import { AgentNodeCard } from "./AgentNodeCard";
 import { AgentNodeContextMenu } from "./AgentNodeContextMenu";
 import { useAgentNodeState } from "./useAgentNodeState";
 
-const iconMap: Record<string, any> = {
+export const iconMap: Record<string, any> = {
   sparkles: Sparkles,
   code: Code,
   cpu: Cpu,
@@ -31,19 +32,19 @@ export const AgentNode = ({ id, data, selected }: NodeProps) => {
   // Subscribe directly to status and currentTool as primitive values - this guarantees re-render on change
   const status: AgentStatus = useStore((state) => state.sessions.get(id)?.status) || "idle";
   const currentTool = useStore((state) => state.sessions.get(id)?.currentTool);
+  const isSelected = useStore((state) => state.selectedNodeId === id && state.sidebarOpen);
+  const shortcutIndex = useStore((state) => {
+    const index = orderedAgents(state.sessions, state.activeCanvasId).findIndex((s) => s.id === id);
+    return index === -1 ? undefined : index;
+  });
 
   // Get the full session for other data
   const session = useStore((state) => state.sessions.get(id));
 
-  const {
-    contextMenu,
-    handleContextMenu,
-    handleDelete,
-    closeContextMenu,
-  } = useAgentNodeState(id, nodeData, session);
+  const { contextMenu, handleContextMenu, closeContextMenu } = useAgentNodeState();
 
   const displayColor = session?.customColor || session?.color || nodeData.color || "#22C55E";
-  const displayName = session?.customName || session?.agentName || nodeData.label || "Agent";
+  const displayName = session?.customName || session?.metrics?.title || session?.agentName || nodeData.label || "Agent";
   const displayIcon = nodeData.icon || "cpu";
   const Icon = iconMap[displayIcon] || Cpu;
 
@@ -55,27 +56,21 @@ export const AgentNode = ({ id, data, selected }: NodeProps) => {
         onContextMenu={handleContextMenu}
       >
         <AgentNodeCard
-          selected={selected}
+          nodeId={id}
+          session={session}
+          selected={selected || isSelected}
           displayColor={displayColor}
           displayName={displayName}
           Icon={Icon}
           agentId={nodeData.agentId}
           status={status}
           currentTool={currentTool}
-          cwd={session?.cwd}
-          originalCwd={session?.originalCwd}
-          gitBranch={session?.gitBranch}
-          ticketId={session?.ticketId}
-          ticketTitle={session?.ticketTitle}
+          shortcutIndex={shortcutIndex}
         />
       </motion.div>
 
       {contextMenu && (
-        <AgentNodeContextMenu
-          position={contextMenu}
-          onClose={closeContextMenu}
-          onDelete={handleDelete}
-        />
+        <AgentNodeContextMenu nodeId={id} position={contextMenu} onClose={closeContextMenu} />
       )}
     </>
   );

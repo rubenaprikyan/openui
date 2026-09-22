@@ -5,7 +5,7 @@ import { useStore } from "../stores/useStore";
 const CATEGORY_COLORS = ["#F97316", "#22C55E", "#3B82F6", "#8B5CF6", "#EC4899", "#14B8A6"];
 
 export function CanvasControls() {
-  const { setAddAgentModalOpen, nodes, addNode } = useStore();
+  const { setAddAgentModalOpen, nodes, addNode, activeCanvasId } = useStore();
 
   const handleAddAgent = () => {
     setAddAgentModalOpen(true);
@@ -16,7 +16,7 @@ export function CanvasControls() {
     const color = CATEGORY_COLORS[Math.floor(Math.random() * CATEGORY_COLORS.length)];
 
     // Find a good position (offset from existing nodes)
-    const categoryCount = nodes.filter(n => n.type === "category").length;
+    const categoryCount = nodes.filter(n => n.type === "category" && ((n.data as any).canvasId || "main") === activeCanvasId).length;
     const position = {
       x: 50 + (categoryCount % 3) * 300,
       y: 50 + Math.floor(categoryCount / 3) * 250,
@@ -29,6 +29,7 @@ export function CanvasControls() {
       position,
       width: 250,
       height: 200,
+      canvasId: activeCanvasId,
     };
 
     // Save to server
@@ -47,6 +48,7 @@ export function CanvasControls() {
       data: {
         label: "New Category",
         color,
+        canvasId: activeCanvasId,
       },
       zIndex: -1,
     });
