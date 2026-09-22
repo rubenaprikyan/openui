@@ -59,7 +59,7 @@ export function injectPluginDir(command: string, agentId: string): string {
 }
 
 // Get git branch for a directory
-function getGitBranch(cwd: string): string | null {
+export function getGitBranch(cwd: string): string | null {
   try {
     const result = spawnSync(["git", "rev-parse", "--abbrev-ref", "HEAD"], {
       cwd,
@@ -205,6 +205,91 @@ const MAX_BUFFER_SIZE = 1000;
 
 export const sessions = new Map<string, Session>();
 
+// Spawn a bash PTY for a session and wire output broadcasting
+export function attachPty(sessionId: string, session: Session) {
+  const ptyProcess = spawnPty("/bin/bash", [], {
+    name: "xterm-256color",
+    cwd: session.cwd,
+    env: {
+      ...process.env,
+      TERM: "xterm-256color",
+      // Pass our session ID so the plugin can include it in status updates
+      OPENUI_SESSION_ID: session.parentSessionId || sessionId,
+      // Let the plugin reach this server regardless of which port it runs on
+      OPENUI_PORT: String(process.env.PORT || 6968),
+    },
+    rows: 30,
+    cols: 120,
+  });
+
+  session.pty = ptyProcess;
+
+  // Output decay
+  const resetInterval = setInterval(() => {
+    if (!sessions.has(sessionId) || session.pty !== ptyProcess) {
+      clearInterval(resetInterval);
+      return;
+    }
+    session.recentOutputSize = Math.max(0, session.recentOutputSize - 50);
+  }, 500);
+
+  ptyProcess.onData((data: string) => {
+    session.outputBuffer.push(data);
+    if (session.outputBuffer.length > MAX_BUFFER_SIZE) {
+      session.outputBuffer.shift();
+    }
+
+    session.lastOutputTime = Date.now();
+    session.recentOutputSize += data.length;
+
+    // Just broadcast output - status comes from plugin hooks
+    for (const client of session.clients) {
+      if (client.readyState === 1) {
+        client.send(JSON.stringify({ type: "output", data }));
+      }
+    }
+  });
+
+  return ptyProcess;
+}
+
+// Create an auxiliary shell terminal in the same directory as an agent
+export function createShell(parentSessionId: string): { shellId: string } | null {
+  const parent = sessions.get(parentSessionId);
+  if (!parent) return null;
+
+  const shellId = `${parentSessionId}-shell-${Date.now().toString(36)}`;
+  const now = Date.now();
+  const shell: Session = {
+    pty: null,
+    agentId: "shell",
+    agentName: "Shell",
+    command: "",
+    cwd: parent.cwd,
+    createdAt: new Date().toISOString(),
+    clients: new Set(),
+    outputBuffer: [],
+    status: "idle",
+    lastOutputTime: now,
+    lastInputTime: 0,
+    recentOutputSize: 0,
+    nodeId: parent.nodeId,
+    canvasId: parent.canvasId,
+    isShell: true,
+    parentSessionId,
+  };
+  sessions.set(shellId, shell);
+  attachPty(shellId, shell);
+  log(`\x1b[38;5;141m[shell]\x1b[0m Created ${shellId} in ${parent.cwd}`);
+  return { shellId };
+}
+
+export function listShells(parentSessionId: string): string[] {
+  return Array.from(sessions.entries())
+    .filter(([, s]) => s.isShell && s.parentSessionId === parentSessionId)
+    .map(([id]) => id);
+}
+
 export function createSession(params: {
   sessionId: string;
   agentId: string;
@@ -222,6 +307,8 @@ export function createSession(params: {
   baseBranch?: string;
   createWorktreeFlag?: boolean;
   ticketPromptTemplate?: string;
+  canvasId?: string;
+  icon?: string;
 }): { session: Session; cwd: string; gitBranch?: string } {
   const {
     sessionId,
@@ -239,6 +326,8 @@ export function createSession(params: {
     baseBranch,
     createWorktreeFlag,
     ticketPromptTemplate,
+    canvasId,
+    icon,
   } = params;
 
   let workingDir = originalCwd;
@@ -278,22 +367,9 @@ export function createSession(params: {
     gitBranch = getGitBranch(workingDir);
   }
 
-  const ptyProcess = spawnPty("/bin/bash", [], {
-    name: "xterm-256color",
-    cwd: workingDir,
-    env: {
-      ...process.env,
-      TERM: "xterm-256color",
-      // Pass our session ID so the plugin can include it in status updates
-      OPENUI_SESSION_ID: sessionId,
-    },
-    rows: 30,
-    cols: 120,
-  });
-
   const now = Date.now();
   const session: Session = {
-    pty: ptyProcess,
+    pty: null,
     agentId,
     agentName,
     command,
@@ -315,36 +391,13 @@ export function createSession(params: {
     ticketId,
     ticketTitle,
     ticketUrl,
+    canvasId: canvasId || "main",
+    icon,
+    lastActivityAt: now,
   };
 
   sessions.set(sessionId, session);
-
-  // Output decay
-  const resetInterval = setInterval(() => {
-    if (!sessions.has(sessionId) || !session.pty) {
-      clearInterval(resetInterval);
-      return;
-    }
-    session.recentOutputSize = Math.max(0, session.recentOutputSize - 50);
-  }, 500);
-
-  // PTY output handler
-  ptyProcess.onData((data: string) => {
-    session.outputBuffer.push(data);
-    if (session.outputBuffer.length > MAX_BUFFER_SIZE) {
-      session.outputBuffer.shift();
-    }
-
-    session.lastOutputTime = Date.now();
-    session.recentOutputSize += data.length;
-
-    // Just broadcast output - status comes from plugin hooks
-    for (const client of session.clients) {
-      if (client.readyState === 1) {
-        client.send(JSON.stringify({ type: "output", data }));
-      }
-    }
-  });
+  const ptyProcess = attachPty(sessionId, session);
 
   // Run the command (inject plugin-dir for Claude if available)
   const finalCommand = injectPluginDir(command, agentId);
@@ -378,6 +431,10 @@ export function deleteSession(sessionId: string) {
   if (session.pty) session.pty.kill();
 
   sessions.delete(sessionId);
+  for (const shellId of listShells(sessionId)) {
+    sessions.get(shellId)?.pty?.kill();
+    sessions.delete(shellId);
+  }
   log(`\x1b[38;5;141m[session]\x1b[0m Killed ${sessionId}`);
   return true;
 }
@@ -390,7 +447,7 @@ export function restoreSessions() {
 
   for (const node of state.nodes) {
     const buffer = loadBuffer(node.sessionId);
-    const gitBranch = getGitBranch(node.cwd);
+    const gitBranch = getGitBranch(node.cwd) || node.gitBranch;
 
     const session: Session = {
       pty: null,
@@ -411,6 +468,18 @@ export function restoreSessions() {
       notes: node.notes,
       nodeId: node.nodeId,
       isRestored: true,
+      position: node.position,
+      icon: node.icon,
+      canvasId: node.canvasId || "main",
+      pinned: node.pinned,
+      archived: node.archived,
+      originalCwd: node.originalCwd,
+      ticketId: node.ticketId,
+      ticketTitle: node.ticketTitle,
+      ticketUrl: node.ticketUrl,
+      claudeSessionId: node.claudeSessionId,
+      transcriptPath: node.transcriptPath,
+      lastActivityAt: node.lastActivityAt,
     };
 
     sessions.set(node.sessionId, session);

@@ -66,6 +66,15 @@ bunx @fallom/openui
 - Session persistence and restore
 - Version check and empty state UI
 
+### Advanced Workspace
+- **Multiple canvases**: tabs above the canvas (`+ New Canvas`), double-click to rename; move agents between canvases from the context menu
+- **List view**: toggle grid/list; table of agents with branch, PRs, directory, tokens, status, last active and started time — sortable, groupable (status / category / directory), filterable (working, needs attention, idle, pinned, archived), with column toggles and bulk archive/move/delete
+- **Docked agent panel**: resizable split view with a drag handle, maximize, extra shell tabs (`+`) in the agent's directory, and a collapsible *Details* footer
+- **Token & context tracking**: parsed from the Claude Code transcript — total tokens, current context usage with a progress bar, model (e.g. `Opus 4.8`), prompt count and the auto-generated session title. Set `OPENUI_CONTEXT_WINDOW` to override the default 200K window (1M is detected automatically)
+- **Pull requests & CI**: PRs for each agent's branch via the `gh` CLI, with open/draft/merged/closed state and check status; refreshed every minute and whenever an agent stops
+- **Pin / archive / copy link** actions on every card; `?agent=<id>` deep links
+- **Keyboard**: `⌘K` search agents by name, branch, directory, PR or ticket · `⌥1`–`⌥9` jump to an agent · `Esc` closes the panel (outside the terminal)
+
 ### Coming Soon: Linear Integration
 - Start sessions directly from Linear tickets
 - Auto-create isolated branches per ticket

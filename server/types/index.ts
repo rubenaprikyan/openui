@@ -41,6 +41,45 @@ export interface Session {
   // Permission detection
   preToolTime?: number;
   permissionTimeout?: ReturnType<typeof setTimeout>;
+  // Organization
+  canvasId: string;
+  icon?: string;
+  pinned?: boolean;
+  archived?: boolean;
+  // Metrics (from Claude transcript + git/gh)
+  transcriptPath?: string;
+  metrics?: SessionMetrics;
+  prs?: PullRequestInfo[];
+  lastActivityAt?: number;
+  // Auxiliary shell terminals attached to this agent (not rendered as nodes)
+  isShell?: boolean;
+  parentSessionId?: string;
+}
+
+export interface SessionMetrics {
+  model?: string;
+  // Auto-generated conversation title from Claude Code
+  title?: string;
+  totalTokens: number;
+  outputTokens: number;
+  contextTokens: number;
+  contextWindow: number;
+  turns: number;
+  // Internal: incremental transcript parsing
+  transcriptOffset?: number;
+}
+
+export type PullRequestState = "OPEN" | "MERGED" | "CLOSED";
+export type ChecksState = "SUCCESS" | "FAILURE" | "PENDING" | "NONE";
+
+export interface PullRequestInfo {
+  number: number;
+  url: string;
+  title: string;
+  state: PullRequestState;
+  isDraft: boolean;
+  checks: ChecksState;
+  reviewDecision?: string;
 }
 
 export interface LinearTicket {
@@ -73,21 +112,40 @@ export interface PersistedNode {
   customName?: string;
   customColor?: string;
   notes?: string;
+  icon?: string;
   position: { x: number; y: number };
+  canvasId?: string;
+  pinned?: boolean;
+  archived?: boolean;
+  gitBranch?: string;
+  originalCwd?: string;
+  ticketId?: string;
+  ticketTitle?: string;
+  ticketUrl?: string;
+  claudeSessionId?: string;
+  transcriptPath?: string;
+  lastActivityAt?: number;
 }
 
 export interface PersistedCategory {
   id: string;
   label: string;
   color: string;
+  canvasId?: string;
   position: { x: number; y: number };
   width: number;
   height: number;
 }
 
+export interface Canvas {
+  id: string;
+  name: string;
+}
+
 export interface PersistedState {
   nodes: PersistedNode[];
   categories?: PersistedCategory[];
+  canvases?: Canvas[];
 }
 
 export interface Agent {

@@ -150,6 +150,7 @@ export function NewSessionModal({
     updateSession,
     nodes,
     launchCwd,
+    activeCanvasId,
   } = useStore();
 
   // Get ReactFlow instance to access viewport
@@ -399,6 +400,7 @@ export function NewSessionModal({
             command: fullCommand,
             cwd: workingDir,
             nodeId: existingNodeId,
+            canvasId: existingSession.canvasId,
             customName: customName || existingSession.customName,
             customColor: existingSession.customColor,
             // Ticket info if selected (Linear or GitHub)
@@ -449,7 +451,8 @@ export function NewSessionModal({
         const centerY = (-viewport.y + viewportHeight / 2) / viewport.zoom;
 
         // Find free positions near viewport center for all new agents
-        const freePositions = findFreePosition(centerX, centerY, nodes, count);
+        // Only avoid nodes that are actually visible on this canvas
+        const freePositions = findFreePosition(centerX, centerY, nodes.filter((n) => !n.hidden), count);
 
         for (let i = 0; i < count; i++) {
           const nodeId = `node-${Date.now()}-${i}`;
@@ -466,6 +469,8 @@ export function NewSessionModal({
               command: fullCommand,
               cwd: workingDir,
               nodeId,
+              canvasId: activeCanvasId,
+              icon: selectedAgent.icon,
               customName: count > 1 ? agentName : customName || undefined,
               // Ticket info if selected (only for first agent)
               ...(i === 0 && selectedTicket && {
@@ -515,6 +520,8 @@ export function NewSessionModal({
             cwd: newCwd || workingDir,
             gitBranch: gitBranch || branchName || undefined,
             status: "idle",
+            canvasId: activeCanvasId,
+            lastActivityAt: Date.now(),
             customName: count > 1 ? agentName : customName || undefined,
             ticketId: i === 0 ? (selectedTicket?.identifier || (selectedGithubIssue ? `#${selectedGithubIssue.number}` : undefined)) : undefined,
             ticketTitle: i === 0 ? (selectedTicket?.title || selectedGithubIssue?.title) : undefined,

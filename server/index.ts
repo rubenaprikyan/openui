@@ -5,6 +5,7 @@ import type { ServerWebSocket } from "bun";
 import { apiRoutes } from "./routes/api";
 import { sessions, restoreSessions } from "./services/sessionManager";
 import { saveState } from "./services/persistence";
+import { startMetricsLoop } from "./services/metrics";
 import type { WebSocketData } from "./types";
 
 const app = new Hono();
@@ -84,6 +85,9 @@ Bun.serve<WebSocketData>({
             if (session.pty) {
               session.pty.write(msg.data);
               session.lastInputTime = Date.now();
+              // Typing into an auxiliary shell counts as activity for its agent
+              const owner = session.parentSessionId ? sessions.get(session.parentSessionId) : session;
+              if (owner) owner.lastActivityAt = Date.now();
             }
             break;
           case "resize":
@@ -109,6 +113,7 @@ Bun.serve<WebSocketData>({
 
 // Restore sessions on startup
 restoreSessions();
+startMetricsLoop();
 
 log(`\x1b[38;5;141m[server]\x1b[0m Running on http://localhost:${PORT}`);
 log(`\x1b[38;5;245m[server]\x1b[0m Launch directory: ${process.env.LAUNCH_CWD || process.cwd()}`);
@@ -124,7 +129,6 @@ process.on("SIGINT", () => {
   saveState(sessions);
   for (const [, session] of sessions) {
     if (session.pty) session.pty.kill();
-    if (session.stateTrackerPty) session.stateTrackerPty.kill();
   }
   process.exit(0);
 });
