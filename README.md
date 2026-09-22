@@ -27,15 +27,20 @@ OpenUI gives you a visual command center where each agent is a node on a canvas:
 
 ## Installation
 
-```bash
-# Install globally
-npm install -g @fallom/openui
-openui
+This fork is installed from source and linked globally with Bun:
 
-# Or run without installing
-npx @fallom/openui
-bunx @fallom/openui
+```bash
+git clone https://github.com/rubenaprikyan/openui.git
+cd openui
+bun install && (cd client && bun install && bun run build)
+bun link          # adds `openui` and `openui-update` to ~/.bun/bin
+
+openui            # run in any project directory
+openui --no-open  # don't open the browser
+openui-update     # git pull + reinstall + rebuild
 ```
+
+On first run, `~/.openui/claude-code-plugin` is symlinked to this checkout's plugin (any previous copy is kept as `.bak-*`).
 
 ## Quick Start
 
@@ -116,7 +121,7 @@ OpenUI runs a local server that:
 ## Development
 
 ```bash
-git clone https://github.com/Fallomai/openui.git
+git clone https://github.com/rubenaprikyan/openui.git
 cd openui
 
 bun install
